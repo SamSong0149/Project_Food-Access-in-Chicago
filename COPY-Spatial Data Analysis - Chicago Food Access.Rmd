@@ -1,0 +1,863 @@
+---
+title: "Spatial Data Analysis of Grocery Store Locations in Chicago"
+author: "Sam Song"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+editor_options: 
+  chunk_output_type: console
+---
+
+# **Introduction** 
+
+### Food Appartheid in Chicago
+Food Apartheid, first coined by food justice activist Karen Washington, refers to a system of segregation that divides those with access to an abundance of nutritious food and those who have been denied that access due to systemic injustice. While conveying similar meanings as food deserts, the term food apartheid is replacing food deserts in recent days because food apartheid better reflects the structural injustices and disparities in food access by low-income communities and communities of color than food deserts, which only explain the geographical area that experiences low access to healthy food without accounting for deeply rooted history of racial discrimination and injustice.  
+
+Chicago, despite being the third largest city in the United States, is one of the cities that experiences severe food apartheid problems, where one in five households in the Chicago area is facing food insecurity, according to the Greater Chicago Food Depository. Food insecurity issues are especially more prevalent in the community areas of the south-side of Chicago where the majority of residents are African-Americans. One reason these areas are suffering from food accessibility is that there are not enough grocery stores and even existing ones are disappearing one by one. The presence of the grocery store in a community area is a very important measure of food accessibility because it provides diverse line of nutritious groceries including fresh produce, fresh meat, deli, and other packaged goods, all of which are crucial factors of healthy diets. 
+
+In this analysis, I am focusing on the grocery store locations in the city of Chicago and their potential relationship with the demographic factors including race and socioeconomic status. In order to answer the main question of which areas of Chicago are affected by food apartheid and the special characteristics of those areas, I computed Moran's I to measure the spatial autocorrelation of grocery store locations, and then performed a spatial regression using spatial autoregressive (SAR) models to look into the relationship between the grocery store locations and several independent factors, while accounting for spatial impact.
+
+```{r, include = message, include = FALSE}
+library(dplyr)
+library(stringr)
+library(tidyverse)
+library(sf)
+library(tmap)
+library(spdep)
+library(spatialreg)
+library(kableExtra)
+```
+
+```{r, include = FALSE}
+# read Chicago Community Boundary data (source: https://data.cityofchicago.org/Facilities-Geographic-Boundaries/Boundaries-Community-Areas-current-/cauq-8yn6)
+chicago_sf <- st_read("~/Documents/Data/ChicagoCA/chicagoCA.shp") %>%
+  select(2, 6, 8:10) %>%
+  rename(ComAreaID = area_num_1) %>%
+  mutate(ComAreaID = as.numeric(ComAreaID))
+
+# read Chicago demographic data (source: https://www.cmap.illinois.gov/data/data-hub)
+chicago_census <- read_csv("~/Documents/Data/CMAP_2022/cds_202207/ReferenceCCAProfiles20162020.csv") %>%
+  select(GEOID, GEOG, `2020_POP`, WHITE, ASIAN, BLACK, HISP, OTHER, UNEMP, NO_VEH, MEDINC, INCPERCAP, INC_LT_25K, TRANSIT_LOW_PCT, WALKABLE_LOW_PCT) %>%
+  rename(ComAreaID = GEOID,
+         community = GEOG,
+         Pop_2020 = `2020_POP`,
+         White = WHITE,
+         Asian = ASIAN,
+         Hispanic = HISP,
+         Black = BLACK,
+         Other = OTHER,
+         Unemployed = UNEMP,
+         No_vehicle = NO_VEH,
+         Med_income = MEDINC,
+         Per_cap_income = INCPERCAP,
+         Income_under_25K = INC_LT_25K,
+         Pct_bad_transit = TRANSIT_LOW_PCT,
+         Pct_not_walkable = WALKABLE_LOW_PCT) %>%
+  mutate(Pct_white = round(White / Pop_2020 * 100, 2),
+         Pct_asian = round(Asian / Pop_2020 * 100, 2),
+         Pct_black = round(Black / Pop_2020 * 100, 2),
+         Pct_hispanic = round(Hispanic / Pop_2020 * 100, 2),
+         Pct_other = round(Other / Pop_2020 * 100, 2),
+         Pct_unemployed = round(Unemployed / Pop_2020 * 100, 2),
+         Pct_poverty = round(Income_under_25K / Pop_2020 * 100, 2),
+         Pct_no_vehicle = round(No_vehicle / Pop_2020 * 100, 2),
+         Pct_bad_transit = round(Pct_bad_transit, 3),
+         Pct_not_walkable = round(Pct_not_walkable, 3),
+         Med_income = Med_income * 1,
+         Per_cap_income = Per_cap_income * 1,
+         Pct_black = ifelse(Pct_black > 100, round((Black)/(Black + White + Asian + Hispanic + Other) * 100, 2), Pct_black))
+
+
+# join the selected variables above onto the first dataset by community ID
+chicago_sf <- chicago_sf %>%
+  inner_join(chicago_census, by = c("ComAreaID"= "ComAreaID")) %>%
+  select(-5) %>%
+  rename(community = community.x)
+
+
+# read the third dataset about the grocery store in Chicago (source: https://data.cityofchicago.org/Health-Human-Services/Grocery-Store-Status-Map/rish-pa6g)
+grocery_store <- read_csv("~/Documents/Data/grocery_chicago.csv")
+
+grocery_store <- grocery_store %>%
+  # drop rows with missing geometry information
+  filter(is.na(Location) == FALSE) %>%
+  # extract latitude and longitude from the string
+  mutate(x = str_split(Location, " ", simplify = TRUE)[,2],
+         y = str_split(Location, " ", simplify = TRUE)[,3],
+         # convert the extracted value to numeric
+         x = as.numeric(str_replace_all(x, "\\(", "")),
+         y = as.numeric(str_replace_all(y, "\\)", ""))) %>%
+  select(- Location, - `Last updated`) %>%
+  rename(status = `New status`,
+         Chain = `Store Name`) %>%
+  # filter out the online-only store as there is only one value
+  filter(status != 'ONLINE ORDERS ONLY',
+         status != 'CLOSED') %>%
+  # transform the dataset to a sf object
+  st_as_sf(coords = c("x", "y"), remove = FALSE) %>%
+  # assign the Coordinate Reference System (WGS 84)
+  st_set_crs(4236)
+
+# transorm the Coordinate Reference System to match that of the first dataset.
+grocery_store <- st_transform(grocery_store, st_crs(chicago_sf))
+
+
+
+# find grocery stores within each neighborhood
+grocery_nb <- st_join(grocery_store, chicago_sf, join = st_within) %>%
+  filter(is.na(ComAreaID) == FALSE)
+
+
+# count number of grocery stores
+grocery_nb_cnt <- as_tibble(grocery_nb) %>%
+  count(ComAreaID)
+
+
+# join the grocery counts onto the original dataset
+chicago_sf <- left_join(chicago_sf, grocery_nb_cnt) %>%
+  rename(num_grocery = n) 
+
+
+# finalize data preparation
+chicago_sf <- chicago_sf %>%
+  # make sure there is no NAs by turning missing values to 0
+  mutate(num_grocery = ifelse(is.na(num_grocery), 0 , num_grocery),
+         # create a column that shows the number of grocery stores per 100,000 residents
+         grocery_100k = num_grocery/Pop_2020 * 100000)
+```
+
+# Spatial Autocorrelation
+
+### Exploratory Data Analysis**
+
+```{r, out.width = "50%"}
+color_status = c("OPEN" = "#228B22",
+                 "CLOSED" = "#EE4B2B")
+
+tmap_mode("plot")
+
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "lightblue") +
+  tm_text("ComAreaID", 
+          size = .6,
+          fontface = "bold",
+          xmod = -.1,
+          ymod = -.2) +
+  tm_layout(title = "Fig 1.\nCommunity Areas in Chicago",
+            inner.margins = c(.05, .05, .12, .05),
+            title.fontface = "bold",
+            title.size = 1)
+
+# List of Community Areas of Chicago
+table <- chicago_sf %>%
+  select(1:2) %>%
+  arrange(ComAreaID) %>%
+  st_drop_geometry() %>%
+  rename(ID = ComAreaID,
+         Name = community) %>%
+  kbl(caption = "Table 1.\nList of Community Areas in Chicago") %>%
+  kable_classic(html_font = "Serif",
+                full_width = FALSE) %>%
+  kable_styling("striped") %>%
+  scroll_box(width = "500px", height = "200px")
+table 
+```
+
+To begin with, I created a map of the community areas of Chicago. There are a total of 77 community areas with each area surrounded by red borderlines. The names of community areas corresponding to the ID can be found in the table.
+
+```{r, out.width = "50%"}
+# Grocery store location
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "lightblue") +
+  tm_shape(grocery_store) +
+  tm_dots(col = "#228B22",
+          size = .1,
+          palette = color_status) +
+  tm_layout(title = "Figure 2.\nGrocery Store Locations in Chicago (2020)",
+            inner.margins = c(.05, .05, .12, .05),
+            title.fontface = "bold",
+            title.size = 1)
+
+table2 <- chicago_sf %>%
+  select(ComAreaID, community, num_grocery) %>%
+  arrange(desc(num_grocery)) %>%
+  rename(ID = ComAreaID,
+         Name = community,
+         `Number of Grocery Stores` = num_grocery) %>%
+  st_drop_geometry() %>%
+  kbl(caption = "Table 2.\nNumber of Grocery Stores in each ComArea of Chicago") %>%
+  kable_classic(html_font = "Serif",
+                full_width = FALSE) %>%
+  kable_styling("striped") %>%
+  scroll_box(width = "500px", height = "200px")
+table2
+
+
+more_than_10 <- chicago_sf %>%
+  filter(num_grocery >= 10) 
+  
+zero <- chicago_sf %>%
+  filter(num_grocery == 0)
+
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "lightblue") +
+  tm_shape(more_than_10) +
+  tm_polygons(col = "#228B22") +
+  tm_text("ComAreaID") +
+  tm_shape(zero) +
+  tm_polygons(col = "red") +
+  tm_text("ComAreaID", size = .8) +
+  tm_shape(grocery_store) +
+  tm_dots(size = .1, alpha = .4) +
+  tm_layout(title = "Figure 3.\nCommunity Areas with 0 or more than 10 grocery stores",
+            inner.margins = c(.05, .05, .12, .05),
+            title.fontface = "bold",
+            title.size = .8) +
+  tm_add_legend(title = "Number of Grocery Stores",
+                labels = c("None",
+                           "More than 10"),
+                col = c("red", "#228B22"))
+```
+
+Once the map of Chicago was created, I then plotted the locations of grocery stores all over the Chicago in Figure 2. Each dot represents the grocery store location. From Figure 2, it is already quite intuitive that there are more grocery stores in the north side of Chicago than south side. Table 2 below lists the community areas and the number of grocery stores in each area. While a few of the areas have more than 10 grocery stores, there even exists community areas with **zero** grocery stores. In figure 3, I filtered the community areas so that only those areas with either more than 10 (in green) or zero (in red) grocery stores. This figure highlights the discrepency in the number of grocery stores between community areas and the fact that those areas filled in red tend to be located at the south side of the city. However, it is not the most appropriate to make any conclusions based solely on this map because this is simply counting the number of grocery stores in each area and there are many other factors that have not been accounted for. For example, although both the areas 18 and 54 have zero grocery stores, the degree of accessibility to grocery stores might be much lower for residents in area 18 than those living in area 54 because there are several grocery stores located right at the border of areas between 18 and 19. Therefore, it is not possible to assume that all of the nine red community areas have the same degree of accessibility to grocery stores. 
+
+### Moran's I
+
+From the initial visualizations, it seems to be that the values close to one another tend to be similar, just like the number of grocery stores in each community area. Knowing the locations of grocery stores do not exhibit a completely random spatial pattern, I decided to measure a spatial pattern or clustering by computing Moran's I statistic.
+
+```{r, out.width = "50%"}
+# create neigbors
+chicago_nb <- poly2nb(chicago_sf, queen = TRUE)
+# Create neighbor weights
+chicago_nbw <- nb2listw(chicago_nb, style = "W", zero.policy = TRUE)
+# Check if zero policy attribute says "TRUE": 
+attr(chicago_nbw, "zero.policy")
+
+# measures the center point of each neighborhood
+chicago_centroids <- chicago_sf %>%
+  st_centroid() %>%
+  st_coordinates()
+
+# create a sf of neighbors
+neighbors_sf <- nb2lines(chicago_nb, 
+                         coords = chicago_centroids, 
+                         as_sf = TRUE) %>%
+  st_set_crs(st_crs(chicago_sf))
+
+# plot the neighborhoods
+ggplot(chicago_sf) + 
+  geom_sf(color = "white", fill = "lightblue") +
+  geom_sf(data = neighbors_sf) +
+  theme_bw() +
+  labs(title = "Figure 4. Nearest-Neighbor Map")
+```
+
+The Moran’s I statistic is the correlation coefficient for the relationship between a variable (like the number of grocery stores) and its neighboring values. But before computing the correlation, the neighbors have to be defined. While there are many different approaches for creating a list of neighbors, I used `poly2nb` function where it builds a neighbors list based on regions with contiguous boundaries, that is sharing one or more boundary point. The next step is to add spatial weights to a neighbors list, which is an important step to normalize the Moran's I statistic so that the range of possible Moran's I values are between -1 and 1. 
+
+```{r, out.width = "50%"}
+# create lagged value for the number of grocery stores in each community area of Chicago
+chicago_sf$num_grocery_lag <- lag.listw(chicago_nbw, chicago_sf$num_grocery, zero.policy = TRUE)
+
+# display the relationship between X and X_lagged
+ggplot(chicago_sf) +
+  geom_point(aes(x = num_grocery, y = num_grocery_lag)) +
+  geom_smooth(aes(x = num_grocery, y = num_grocery_lag), method = "lm", se = FALSE) +
+  labs(title = "Figure 5. Lagged number of Grocery Stores", x = "Number of Grocery Stores", y = "") +
+  theme_bw()
+
+# calculate Moran's I statistic
+lm(num_grocery_lag ~ num_grocery, data = chicago_sf) %>%
+  summary()
+```
+
+Once the neighbors list is created and the weights are calculated, we can compute the aggregated values for each neighborhoods (i.e. a total number of grocery stores in the community area), which is referred to as a spatially lagged value ($x_{lag}$). Using the number of grocery stores in each community area of Chicago computed in the setup code chunk above, I plotted the summarized neighborhood value of the number of grocery store ($X_{lag}$) against the number of grocery store for each county ($X$) for each county. The Moran’s I coefficient between $X_{lag}$ and $X$ is the slope of the least squares regression line that best fits the points after having equalized the spread between both sets of data, which can be computed by the linear regression.
+
+There is a slightly easier way to compute the Moran's I statistic, which is to use a built-in `moran.test` function that would conveniently return the statistic. Steps are as follows:
+
+```{r}
+num_grocery.moranI <- moran(chicago_sf$num_grocery,
+                     chicago_nbw, 
+                     n = length(chicago_nbw), 
+                     S0 = Szero(chicago_nbw), 
+                     NAOK = TRUE)
+# return Moran's statistic
+moran.test(chicago_sf$num_grocery, chicago_nbw, zero.policy = TRUE)
+```
+
+The result of both linear regression and `moran.test` is the same at $I = 0.287$. Although the strength of the relationship is quite weak, this suggests that there exists a positive spatial autocorrelation. If there is no degree of association between $X_{lag}$ and $X$, the slope will be close to flat, resulting in a Moran’s I value near 0.
+
+### Significance Test
+
+With Moran's I value of 0.287, what is left is to test the significance of this value. Here I used Monte-Carlo test to prove the significance of Moran's I value I found above. In a Monte-Carlo test, the attribute values (the number of grocery stores in this case) are randomly assigned to community areas in the data set and, for each permutation of the attribute values, a Moran’s I value is computed. The output is a sampling distribution of Moran’s I values under the Null Hypothesis that attribute values are randomly distributed across the city of Chicago. I then compared the observed Moran’s I value to this sampling distribution. Below is the null and alternative hypothesis for this significance testing.
+
+$H_O$: There is **NO** spatial autocorrelation, I is close to 0
+
+$H_A$: There **IS** spatial autocorreation, I $\neq$ 0. 
+
+```{r, out.width="50%"}
+# Null Hypothesis
+chicago_sf$rand_grocery <- sample(chicago_sf$num_grocery, length(chicago_sf$num_grocery), replace = FALSE)
+
+ggplot(chicago_sf) + 
+  geom_sf(aes(fill = rand_grocery)) +
+  scale_fill_gradientn(colours = terrain.colors(10)) +
+  labs(title = "Figure 6. If Grocery Stores were randomly located",
+       fill = "Number of\nGrocery Stores") +
+  theme_bw()
+
+# Moran's I under the Null Hypothesis
+moran(chicago_sf$rand_grocery, listw = chicago_nbw, S0 = Szero(chicago_nbw), n = length(chicago_nbw), zero.policy = TRUE)
+
+# Monte-Carlo test for Moran's I:
+ moran.mc(chicago_sf$num_grocery, 
+          listw = chicago_nbw, 
+          nsim = 499, 
+          zero.policy = TRUE)
+```
+
+The last step is to create a visualization of 499 sampling distribution of simulated Moran's I values in histogram and see where the observed Moran's I value of 0.287 lies. 
+
+```{r, out.width = "50%"}
+# normal distribution of Moran's I value from Moran I test under randomization
+num_grocery_m_norm <- moran.test(chicago_sf$num_grocery, 
+           listw = chicago_nbw, 
+           zero.policy = TRUE)
+
+# Monte-Carlo simulation of Moran I
+num_grocery_mc <-  moran.mc(chicago_sf$num_grocery, 
+          listw = chicago_nbw, 
+          nsim = 499, 
+          zero.policy = TRUE)
+
+# Histogram of MC value from 499 simulations (randomized) with normal distribution overlaid. Red line indicates observed value. 
+ggplot() + 
+  geom_histogram(aes(x = num_grocery_mc$res, after_stat(density))) + 
+  geom_vline(xintercept = num_grocery_mc$statistic, color = "red", size = 1) + 
+  geom_function(fun = function(x) dnorm(x, num_grocery_m_norm$estimate[2], sqrt(num_grocery_m_norm$estimate[3])), color = "blue", size = 1) +
+  theme_bw() +
+  labs(x = "Moran's I",
+       title = "Figure 7. Distribution of Moran's I values under the null hypothesis")
+```
+
+The histogram indicates that the observed value of 0.287 is not a value one would expect to compute if the number of grocery stores values were randomly distributed across each community area of Chicago. Additionally, with a p-value of 0.002, we can reject the null hypothesis and make a conclusion that there is a spatial autocorrelaiton of the number of grocery stores between community areas of Chicago.
+
+# Areal Regression (Simultaneous Autoregressive Model)
+
+Simultaneous Autoregressive Model
+
+$$Y = \beta_0 + \beta_1X + \rho\sum w_i(Y_i-\beta_0 - \beta_1X_i)$$
+$$Y = \beta_0 + \beta_1X + \rho\sum w_iY_i$$
+
+$\rho$ describes the degree of correlation with neighbors; if $\rho$ value is close to 1, it weights heavily and if $\rho$ value is close to 0, not much weight
+$w_i$ is the weight on neighbor $i$. 
+
+$Y_i-\beta_0 - \beta_1X_i$ is the residual!!
+
+### **Exploratory Spatial Data Analysis**
+
+##### Racial Factors
+```{r,fig.show="hold", out.width = "50%"}
+# White population chloropleth
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_white",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(grocery_store) +
+  tm_dots(col = "#228B22",
+          size = .1,
+          palette = color_status,
+          legend.show = FALSE) +
+  tm_layout(title = "Figure 3\nPercentage of White residents in each Community Area",
+            inner.margins = c(.05, .05, .12, .05),
+            title.fontface = "bold",
+            title.size = 1) +
+    tm_add_legend(title = "% White",
+                labels = c("0% - 20%",
+                           "21% - 40%",
+                           "41% - 60%",
+                           "61% - 80%",
+                           "81% - 100%"),
+                col = RColorBrewer::brewer.pal(5, "Purples"))
+
+# African American population chloropleth
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_black",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(grocery_store) +
+  tm_dots(col = "#228B22",
+          size = .1,
+          palette = color_status,
+          legend.show = FALSE) +
+  tm_layout(title = "Figure 4\nPercentage of African American residents in each Community Area",
+            inner.margins = c(.05, .05, .12, .05),
+            title.fontface = "bold",
+            title.size = .8) +
+  tm_add_legend(title = "% African American",
+                labels = c("0% - 20%",
+                           "21% - 40%",
+                           "41% - 60%",
+                           "61% - 80%",
+                           "81% - 100%"),
+                col = RColorBrewer::brewer.pal(5, "Purples"))
+```
+
+I only picked **White** and **African American** to be included in this analysis to prevent this analysis to be exceedingly long and primarily due to the fact that these two races show very clear contrasts in terms of community areas in which each group lives in. One of the observations that is very evident from Figure 3 and Figure 4 is that white people tend to live in the north side of Chicago, consisting of more than 40+ percent of the total population of those community areas in north. On the other hand, African American people tend to be clustered in the south side of the city, consisting of more than 60% to 80% of the entire population of those community areas in south. This might suggests a moderate to strong spatial correlation in the race of residents in each community area, where the residents of the same race tend to live closer to each other just like the figures describe above. Lastly, there is a plenty more grocery store in the community areas whose the dominant race of residents is white than the other case.
+
+##### Socioeconomic Factors
+```{r, fig.show="hold", out.width = "50%"}
+# per capita income
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Per_cap_income",
+              palette = "Purples",
+              legend.show = FALSE) +
+    tm_shape(grocery_store) +
+  tm_dots(col = "#228B22",
+          size = .1,
+          palette = color_status,
+          legend.show = FALSE) +
+  tm_layout(title = "Figure 5\nAverage Per Capita Income",
+            inner.margins = c(.05, .05, .12, .05),
+            title.fontface = "bold",
+            title.size = 1) +
+  tm_add_legend(title = "Average Per Capita Income",
+                labels = c("$0 - $20,000",
+                           "$20,000 - $40,000",
+                           "$40,000 - $60,000",
+                           "$60,000 - $80,000",
+                           "$80,000 - $100,000",
+                           "$100,000 or more"),
+                col = RColorBrewer::brewer.pal(6, "Purples"))
+
+# people with income less than $25,000
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_poverty",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(grocery_store) +
+    tm_dots(col = "#228B22",
+          size = .1,
+          palette = color_status,
+          legend.show = FALSE) +
+  tm_layout(title = "Figure 6\nPercentage of Population with Income less than $25,000",
+            inner.margins = c(.05, .05, .12, .05),
+            title.fontface = "bold",
+            title.size = .9) +
+  tm_add_legend(title = "% less than $25,000",
+                labels = c("0% - 5%",
+                           "5% - 10%",
+                           "10% - 15%",
+                           "15% - 20%",
+                           "20% - 25%",
+                           "25% - 30%",
+                           "30% or higher"),
+                col = RColorBrewer::brewer.pal(7, "Purples"))
+```
+
+Figure 5 displays the average per capita income for each community area. It seems as though the average per capita income is slightly higher, in general, in the community areas in the north side of Chicago than those in the south side of Chicago. But there are a few areas in the northeast side of the city where the average per capita income is much higher than the rest of the city, and those neighborhoods are clusterd together. Figure 6 describes the poverty rate (people who earn less than $25,000 annually) of each community area. It is quite evident that there are significantly less grocery stores in the same areas that show high rates of poverty, and the majority of residents in these community areas are African Americans.
+
+##### Interactive Map
+```{r}
+tmap_mode("view")
+
+# 1. Total population
+pop_tot <- chicago_sf %>%
+  select(Pop_2020)
+# 2. White population
+pct_white <- chicago_sf %>%
+  select(Pct_white)
+# 3. Asian pouplation
+pct_asian <- chicago_sf %>%
+  select(Pct_asian)
+# 4. African American population
+pct_black <- chicago_sf %>%
+  select(Pct_black)
+# 5. Hispanic population
+pct_hispanic <- chicago_sf %>%
+  select(Pct_hispanic)
+# 6. Population of other race
+pct_other <- chicago_sf %>%
+  select(Pct_other)
+# 7. Unemployment rate
+pct_unemployed <- chicago_sf %>%
+  select(Pct_unemployed)
+# 8. Median income
+median_income <- chicago_sf %>%
+  select(Med_income)
+# 9. Per Capita income
+per_capita_income <- chicago_sf %>%
+  select(Per_cap_income)
+# 10. % income less than $25,000
+pct_poverty <- chicago_sf %>%
+  select(Pct_poverty)
+# 11. % no vehicle
+pct_no_vehicle <- chicago_sf %>%
+  select(Pct_no_vehicle)
+
+
+tm_shape(chicago_sf) +
+  tm_polygons() +
+tm_shape(pop_tot) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pop_2020",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(pct_white) +
+  tm_polygons(col = "Pct_white",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(pct_asian) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_asian",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(pct_black) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_black",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(pct_hispanic) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_hispanic",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(pct_other) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_other",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(pct_unemployed) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_unemployed",
+              palette = "Purples",
+              legend.show = FALSE) +
+    tm_shape(median_income) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Med_income",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(per_capita_income) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Per_cap_income",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(pct_poverty) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_poverty",
+              palette = "Purples",
+              legend.show = FALSE) +
+    tm_shape(pct_no_vehicle) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pct_no_vehicle",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_shape(grocery_store) +
+  tm_dots(col = "#228B22",
+          size = .03,
+          legend.show = FALSE)
+```
+
+This is an interactive map where the user can change the input of their interests and look into the distribution of demographic factors throughout the city of Chicago, overlaid with the grocery store locations, which could possibly hint at the association between them. **Click one variable of interest at a time other than `grocery store`.**
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Areal Regression
+
+### aggregate
+```{r, eval = FALSE}
+ggplot(chicago_sf) +
+  geom_point(aes(x = Pct_white, y = num_grocery)) +
+  geom_smooth(aes(x = Pct_white, y = num_grocery), se = FALSE, method = "lm")
+
+ggplot(chicago_sf) +
+  geom_point(aes(x = Pct_black, y = num_grocery)) +
+  geom_smooth(aes(x = Pct_black, y = num_grocery), se = FALSE, method = "lm")
+
+
+ggplot(chicago_sf) +
+  geom_point(aes(x = Pct_white, y = grocery_100k)) +
+  geom_smooth(aes(x = Pct_white, y = grocery_100k), se = FALSE, method = "lm")
+
+ggplot(chicago_sf) +
+  geom_point(aes(x = Pct_black, y = grocery_100k)) +
+  geom_smooth(aes(x = Pct_black, y = grocery_100k), se = FALSE, method = "lm")
+
+
+ggplot(chicago_sf) +
+  geom_point(aes(x = Pct_poverty, y = num_grocery)) +
+  geom_smooth(aes(x = Pct_poverty, y = num_grocery), se = FALSE, method = "lm")
+
+
+ggplot(chicago_sf) +
+  geom_point(aes(x = Pct_poverty, y = grocery_100k)) +
+  geom_smooth(aes(x = Pct_poverty, y = grocery_100k), se = FALSE, method = "lm")
+
+
+```
+
+
+# Visualization
+
+```{r, out.width = "50%", eval = FALSE}
+tmap_mode("view")
+
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_fill(col = "lightblue",
+          popup.vars = c("Community" = "community",
+                         "Population" = "Pop_2020",
+                         "# Grocery Store" = "num_grocery")) +
+  tm_layout(title = "Neighborhoods Map of Chicago")
+
+tm_shape(chicago_sf) +
+  tm_borders(col = "red",
+             alpha = 0.5) +
+    tm_fill(col = "lightblue",
+          popup.vars = c("Community" = "community",
+                         "Population" = "Pop_2020",
+                         "# Grocery Store" = "num_grocery")) +
+  tm_shape(grocery_store) +
+  tm_dots(col = "status",
+          popup.vars = c("Address", "status")) +
+  tm_layout(title = "Grocery stores in Chicago")
+```
+
+
+2. What type of geometry does chicago_sup have? Would we consider this area or point pattern data?
+- point
+
+
+
+```{r, eval = FALSE}
+# left one is point pattern, and the right one is areal, at this point can't really directly compare the two
+ggplot(chicago_sf) + 
+  geom_sf(aes(fill = Per_cap_income)) + 
+  scale_fill_gradientn(colours = colorspace::heat_hcl(10)) + 
+  geom_sf(data = grocery_store) + 
+  theme_bw() + 
+  labs(fill = "Per Capita\nIncome", 
+       title = "Locations of grocery stores, 2020")
+```
+
+
+```{r, eval = FALSE}
+# converted the point pattern data to areal data so that the comparison can be done 
+ggplot(chicago_sf) + 
+  geom_sf(aes(fill = grocery_100k)) + 
+  scale_fill_fermenter(palette = 2, direction = 1) + 
+  labs(fill = "Grocery stores\nper 100k people") + 
+  theme_bw()
+```
+
+
+# Moran's I review
+
+3. Comparing the plots of Per capita income and Grocery stores per 100k, which variable do you think has stronger spatial autocorrelation? 
+
+Whether we are looking at per capita income or at number of grocery stores, we start by creating the neighbors (nb) and the neighbor weights (nbw).
+
+```{r, eval = FALSE}
+# Create neigbors
+chicago_nb <- poly2nb(chicago_sf, queen = TRUE)
+# Create neighbor weights
+chicago_nbw <- nb2listw(chicago_nb, style = "W", zero.policy = TRUE)
+```
+
+4. What does the code below do? Interpret the result.
+```{r, eval = FALSE}
+moran.mc(chicago_sf$num_grocery, chicago_nbw, nsim = 499)
+```
+
+There is a moderately strong spatial autocorrelation (I = .51) 
+
+```{r, eval = FALSE}
+moran.mc(chicago_sf$num_grocery, chicago_nbw, nsim = 499)
+```
+
+There is a strong spatial autocorrelation (I = .69) in the percentage of residents of a neighborhood that identify as White.
+Neighborhoods tend to have similar percentage of white residents as their neighbors.
+
+5. Repeat #4 using the grocery_100k variable. Interpret the result.
+
+```{r, eval = FALSE}
+moran.mc(chicago_sf$grocery_100k, chicago_nbw, nsim = 499)
+```
+
+There is a weaker spatial autocorrelation (I = .13) in the 
+
+
+6. Comparing Per capita income and Grocery stores per 100k in #4 and #5, which variable do you think has stronger spatial autocorrelation? 
+
+
+
+# Regression
+Start by exploring relationships with other variables:
+```{r, eval = FALSE}
+ggplot(chicago_sf) + 
+  geom_point(aes(Per_cap_income, grocery_100k))
+
+ggplot(chicago_sf) + 
+  geom_point(aes(Pct_white, grocery_100k))  
+
+ggplot(chicago_sf) + 
+  geom_point(aes(Per_cap_income, log(grocery_100k)))
+
+
+ggplot(chicago_sf) + 
+  geom_sf(aes(fill = Pct_white), color = "white") + 
+  scale_fill_fermenter() + 
+  geom_sf(data = grocery_store) + 
+  theme_bw()
+```
+
+Start by fitting a linear regression model: 
+```{r, eval = FALSE}
+lm1 <- lm(grocery_100k ~ Pct_white, data= chicago_sf)
+plot(lm1, 1)
+summary(lm1)
+```
+
+Join residuals to sf and Plot Residuals:
+```{r, eval = FALSE}
+chicago_sf$resid1 <- residuals(lm1)
+```
+
+
+7. Using ggplot, make a chloropleth map of the residuals. 
+
+```{r, eval = FALSE}
+# looking at the colors of graph, the assumption of independent is violated, so ordinary linear regression method cannot be performed in here
+ggplot(chicago_sf) +
+  geom_sf(aes(fill = resid1), color = "white") + 
+  scale_fill_gradient2()
+```
+
+
+
+8. Check moran's I:
+```{r, eval = FALSE}
+moran(chicago_sf$resid1, 
+                       chicago_nbw, 
+                       n = length(chicago_nb), 
+                       S0 = Szero(chicago_nbw))
+```
+
+Fit spatial regression:
+```{r, eval = FALSE}
+sarlm1 <- lagsarlm(grocery_100k ~ Pct_white, data = chicago_sf, listw = chicago_nbw)
+
+summary(sarlm1)
+```
+
+- $\rho=$ 0.06; spatial autocorrelation in the number of grocery stores in neighboring communities is pretty low 
+- if $\rho$ is small, OLS is a good model. if $\rho$ is big, OLS is not to be trusted. 
+
+9. Compare the SAR (lagsarlm) and OLS (lm) models. Look at estimates of slope and intercept, the standard error, and p-value.
+
+
+10. Write 2-3 concluding sentences about what you learned of the distribution of grocery stores throughout Chicago. Consider including ideas from your background readings.
+
+- we caanot conclude satistical significance that regions with white people are correlated with more grocery store. Yet, aggregation and confounding variables exists in our analysis. It is also important to note that the graphs paint a different story than our original statistical analysis.
+
+_ **Interpretation**: For every \% point increase in white residents, number of groceries per 100,000 residents is predicted to increase 1.002 times (or by .2\%).
+
+
+
+Tries
+
+```{r,eval = FALSE}
+# Percent no vehicle
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Pct_no_vehicle, y = grocery_100k))
+
+lm_vehicle <- lm(grocery_100k ~ Pct_no_vehicle, data = chicago_sf)
+plot(lm_vehicle, 1)
+summary(lm_vehicle)
+
+# Median Income
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Med_income, y = grocery_100k))
+
+lm_income <- lm(grocery_100k ~ Med_income, data = chicago_sf)
+plot(lm_income, 1)
+summary(lm_income)
+
+# Percent African Americans
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Pct_black, y = grocery_100k))
+
+lm_black <- lm(grocery_100k ~ Pct_black, data = chicago_sf)
+plot(lm_black, 1)
+summary(lm_black)
+
+# Percent Hispanics
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Pct_hispanic, y = grocery_100k))
+
+lm_hisp <- lm(grocery_100k ~ Pct_hispanic, data = chicago_sf)
+plot(lm_hisp, 1)
+summary(lm_hisp)
+
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Pct_bad_transit, y = grocery_100k))
+
+lm_transit <- lm(grocery_100k ~ Pct_bad_transit, data = chicago_sf)
+plot(lm_transit, 1)
+summary(lm_transit)
+```
+
+Possibly
+
+```{r, eval = FALSE}
+# Population in each CA
+tm_shape(chicago_sf) +
+  tm_borders(col = "red", alpha = .5) +
+  tm_polygons(col = "Pop_2020",
+              palette = "Purples",
+              legend.show = FALSE) +
+  tm_layout(title = "Figure 2.\nPopulation of Community Areas in Chicago",
+            title.size = 1,
+            inner.margins = c(.05, .05, .12, .05),
+            title.fontface = "bold") +
+  tm_add_legend(title = "Total Population",
+                labels = c("0 to 20,000",
+                           "20,000 to 40,000",
+                           "40,000 to 60,000",
+                           "60,000 to 80,000",
+                           "80,000 to 100,000",
+                           "100,000 or more"),
+                col = RColorBrewer::brewer.pal(6, "Purples"))
+```
+

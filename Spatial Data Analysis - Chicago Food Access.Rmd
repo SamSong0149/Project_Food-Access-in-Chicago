@@ -1,11 +1,14 @@
 ---
 title: "Simultaneous Autoregressive Model"
 author: "Sam Song"
-output: html_document
-editor_options: 
+output:
+  pdf_document: default
+  html_document: null
+editor_options:
   chunk_output_type: console
 ---
 
+# **Setup**
 Simultaneous Autoregressive Model
 
 $$Y = \beta_0 + \beta_1X + \rho\sum w_i(Y_i-\beta_0 - \beta_1X_i)$$
@@ -63,8 +66,7 @@ chicago_census <- read_csv("~/Documents/Data/CMAP_2022/cds_202207/ReferenceCCAPr
          Pct_bad_transit = round(Pct_bad_transit, 3),
          Pct_not_walkable = round(Pct_not_walkable, 3),
          Med_income = Med_income * 1,
-         Per_cap_income = Per_cap_income * 1) %>%
-  select(-(4:10), -13)
+         Per_cap_income = Per_cap_income * 1)
 
 
 # join the selected variables above onto the first dataset by community ID
@@ -122,8 +124,6 @@ chicago_sf <- chicago_sf %>%
   mutate(num_grocery = ifelse(is.na(num_grocery), 0 , num_grocery),
          # create a column that shows the number of grocery stores per 100,000 residents
          grocery_100k = num_grocery/Pop_2020 * 100000)
-
-         #log_grocery_100k = log((n_grocery + 1)/Pop2014*100000))
 ```
 
 - Data tidying process
@@ -250,7 +250,7 @@ ggplot(chicago_sf) +
 
 Start by fitting a linear regression model: 
 ```{r}
-lm1 <- lm(grocery_100k ~ Pct_white, data= chicago)
+lm1 <- lm(grocery_100k ~ Pct_white, data= chicago_sf)
 plot(lm1, 1)
 summary(lm1)
 ```
@@ -300,43 +300,6 @@ summary(sarlm1)
 _ **Interpretation**: For every \% point increase in white residents, number of groceries per 100,000 residents is predicted to increase 1.002 times (or by .2\%).
 
 
-If time: Try regression with other variables!
-
-```{r}
-ggplot(data = chicago, aes(x = Pov14, y = TeenBirth)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = FALSE)
-
-lm2 <- lm(Pov14 ~ TeenBirth, data = chicago)
-plot(lm2, 1)
-summary(lm2)
-```
-
-```{r}
-chicago$resid2 <- residuals(lm2)
-
-ggplot(chicago) +
-  geom_sf(aes(fill = resid2), color = "white") + 
-  scale_fill_gradient2()
-
-moran(chicago$resid2, 
-                       chicago_nbw, 
-                       n = length(chicago_nb), 
-                       S0 = Szero(chicago_nbw))
-
-sarlm2 <- lagsarlm(Pov14 ~ TeenBirth, data = chicago, listw = chicago_nbw)
-
-summary(sarlm2)
-```
-
-```{r}
-lm3 <- lm(log(PropCrRt) ~ PerCInc14 + Unemp14 + HSGrad14, data = chicago)
-plot(lm3, 1)
-summary(lm3)
-
-sarlm3 <- lagsarlm(log(PropCrRt) ~ PerCInc14 + Unemp14 + HSGrad14, data = chicago, listw = chicago_nbw)
-summary(sarlm3)
-```
 
 Tries
 
