@@ -1,0 +1,361 @@
+---
+title: "Simultaneous Autoregressive Model"
+author: "Sam Song"
+output:
+  html_document: null
+  pdf_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+# **Setup**
+Simultaneous Autoregressive Model
+
+$$Y = \beta_0 + \beta_1X + \rho\sum w_i(Y_i-\beta_0 - \beta_1X_i)$$
+$$Y = \beta_0 + \beta_1X + \rho\sum w_iY_i$$
+
+$\rho$ describes the degree of correlation with neighbors; if $\rho$ value is close to 1, it weights heavily and if $\rho$ value is close to 0, not much weight
+$w_i$ is the weight on neighbor $i$. 
+
+$Y_i-\beta_0 - \beta_1X_i$ is the residual!!
+
+```{r, message = FALSE}
+library(dplyr)
+library(stringr)
+library(tidyverse)
+library(sf)
+library(tmap)
+library(spdep)
+library(spatialreg)
+```
+
+## Data setup
+```{r}
+# read Chicago Community Boundary data (source: https://data.cityofchicago.org/Facilities-Geographic-Boundaries/Boundaries-Community-Areas-current-/cauq-8yn6)
+chicago_sf <- st_read("~/Documents/Data/ChicagoCA/chicagoCA.shp") %>%
+  select(2, 6, 8:10) %>%
+  rename(ComAreaID = area_num_1) %>%
+  mutate(ComAreaID = as.numeric(ComAreaID))
+
+# read Chicago demographic data (source: https://www.cmap.illinois.gov/data/data-hub)
+chicago_census <- read_csv("~/Documents/Data/CMAP_2022/cds_202207/ReferenceCCAProfiles20162020.csv") %>%
+  select(GEOID, GEOG, `2020_POP`, WHITE, ASIAN, BLACK, HISP, OTHER, UNEMP, NO_VEH, MEDINC, INCPERCAP, INC_LT_25K, TRANSIT_LOW_PCT, WALKABLE_LOW_PCT) %>%
+  rename(ComAreaID = GEOID,
+         community = GEOG,
+         Pop_2020 = `2020_POP`,
+         White = WHITE,
+         Asian = ASIAN,
+         Hispanic = HISP,
+         Black = BLACK,
+         Other = OTHER,
+         Unemployed = UNEMP,
+         No_vehicle = NO_VEH,
+         Med_income = MEDINC,
+         Per_cap_income = INCPERCAP,
+         Income_under_25K = INC_LT_25K,
+         Pct_bad_transit = TRANSIT_LOW_PCT,
+         Pct_not_walkable = WALKABLE_LOW_PCT) %>%
+  mutate(Pct_white = round(White / Pop_2020 * 100, 2),
+         Pct_asian = round(Asian / Pop_2020 * 100, 2),
+         Pct_black = round(Black / Pop_2020 * 100, 2),
+         Pct_hispanic = round(Hispanic / Pop_2020 * 100, 2),
+         Pct_other = round(Other / Pop_2020 * 100, 2),
+         Pct_unemployed = round(Unemployed / Pop_2020 * 100, 2),
+         Pct_poverty = round(Income_under_25K / Pop_2020 * 100, 2),
+         Pct_no_vehicle = round(No_vehicle / Pop_2020 * 100, 2),
+         Pct_bad_transit = round(Pct_bad_transit, 3),
+         Pct_not_walkable = round(Pct_not_walkable, 3),
+         Med_income = Med_income * 1,
+         Per_cap_income = Per_cap_income * 1)
+
+
+# join the selected variables above onto the first dataset by community ID
+chicago_sf <- chicago_sf %>%
+  inner_join(chicago_census, by = c("ComAreaID"= "ComAreaID")) %>%
+  select(-5) %>%
+  rename(community = community.x)
+
+
+# read the third dataset about the grocery store in Chicago (source: https://data.cityofchicago.org/Health-Human-Services/Grocery-Store-Status-Map/rish-pa6g)
+grocery_store <- read_csv("~/Documents/Data/grocery_chicago.csv")
+
+grocery_store <- grocery_store %>%
+  # drop rows with missing geometry information
+  filter(is.na(Location) == FALSE) %>%
+  # extract latitude and longitude from the string
+  mutate(x = str_split(Location, " ", simplify = TRUE)[,2],
+         y = str_split(Location, " ", simplify = TRUE)[,3],
+         # convert the extracted value to numeric
+         x = as.numeric(str_replace_all(x, "\\(", "")),
+         y = as.numeric(str_replace_all(y, "\\)", ""))) %>%
+  select(- Location, - `Last updated`) %>%
+  rename(status = `New status`,
+         Chain = `Store Name`) %>%
+  # filter out the online-only store as there is only one value
+  filter(status != 'ONLINE ORDERS ONLY') %>%
+  # transform the dataset to a sf object
+  st_as_sf(coords = c("x", "y")) %>%
+  # assign the Coordinate Reference System (WGS 84)
+  st_set_crs(4236)
+
+# transorm the Coordinate Reference System to match that of the first dataset.
+grocery_store <- st_transform(grocery_store, st_crs(chicago_sf))
+
+
+
+# find grocery stores within each neighborhood
+grocery_nb <- st_join(grocery_store, chicago_sf, join = st_within) %>%
+  filter(is.na(ComAreaID) == FALSE)
+
+
+# count number of grocery stores
+grocery_nb_cnt <- as_tibble(grocery_nb) %>%
+  count(ComAreaID)
+
+
+# join the grocery counts onto the original dataset
+chicago_sf <- left_join(chicago_sf, grocery_nb_cnt) %>%
+  rename(num_grocery = n) 
+
+
+# finalize data preparation
+chicago_sf <- chicago_sf %>%
+  # make sure there is no NAs by turning missing values to 0
+  mutate(num_grocery = ifelse(is.na(num_grocery), 0 , num_grocery),
+         # create a column that shows the number of grocery stores per 100,000 residents
+         grocery_100k = num_grocery/Pop_2020 * 100000)
+```
+
+- Data tidying process
+
+```{r}
+# refined dataset
+chicago_sf
+```
+
+```{r}
+# create a visualization to see if all of the neighborhoods of Chicago are included in the dataset
+ggplot(chicago_sf) +
+  geom_sf(color = "grey", fill = "lightblue") +
+  theme_bw() +
+  labs(title = "Neighborhoods Map of Chicago")
+
+# overlay the locations of grecery store
+ggplot(chicago_sf) +
+  geom_sf(color = "grey", fill = "lightblue") +
+  # grocery store locations in points
+  geom_sf(data = grocery_store, size = 1, aes(color = status)) +
+  theme_bw() +
+  labs(title = "Grocery stores in Chicago")
+```
+
+```{r}
+tmap_mode("view")
+
+tm_shape(chicago_sf) +
+  tm_borders(col = "red",
+             alpha = 0.5) +
+  tm_shape(grocery_store) +
+  tm_dots(col = "status",
+          popup.vars = c("Address", "status"))
+```
+
+
+2. What type of geometry does chicago_sup have? Would we consider this area or point pattern data?
+- point
+
+# Visualize
+
+```{r}
+# left one is point pattern, and the right one is areal, at this point can't really directly compare the two
+ggplot(chicago_sf) + 
+  geom_sf(aes(fill = Per_cap_income)) + 
+  scale_fill_gradientn(colours = colorspace::heat_hcl(10)) + 
+  geom_sf(data = grocery_store) + 
+  theme_bw() + 
+  labs(fill = "Per Capita\nIncome", 
+       title = "Locations of grocery stores, 2020")
+```
+
+
+```{r}
+# converted the point pattern data to areal data so that the comparison can be done 
+ggplot(chicago_sf) + 
+  geom_sf(aes(fill = grocery_100k)) + 
+  scale_fill_fermenter(palette = 2, direction = 1) + 
+  labs(fill = "Grocery stores\nper 100k people") + 
+  theme_bw()
+```
+
+
+# Moran's I review
+
+3. Comparing the plots of Per capita income and Grocery stores per 100k, which variable do you think has stronger spatial autocorrelation? 
+
+Whether we are looking at per capita income or at number of grocery stores, we start by creating the neighbors (nb) and the neighbor weights (nbw).
+
+```{r}
+# Create neigbors
+chicago_nb <- poly2nb(chicago_sf, queen = TRUE)
+# Create neighbor weights
+chicago_nbw <- nb2listw(chicago_nb, style = "W", zero.policy = TRUE)
+```
+
+4. What does the code below do? Interpret the result.
+```{r}
+moran.mc(chicago_sf$num_grocery, chicago_nbw, nsim = 499)
+```
+
+There is a moderately strong spatial autocorrelation (I = .51) 
+
+```{r}
+moran.mc(chicago_sf$num_grocery, chicago_nbw, nsim = 499)
+```
+
+There is a strong spatial autocorrelation (I = .69) in the percentage of residents of a neighborhood that identify as White.
+Neighborhoods tend to have similar percentage of white residents as their neighbors.
+
+5. Repeat #4 using the grocery_100k variable. Interpret the result.
+
+```{r}
+moran.mc(chicago_sf$grocery_100k, chicago_nbw, nsim = 499)
+```
+
+There is a weaker spatial autocorrelation (I = .13) in the 
+
+
+6. Comparing Per capita income and Grocery stores per 100k in #4 and #5, which variable do you think has stronger spatial autocorrelation? 
+
+
+
+# Regression
+Start by exploring relationships with other variables:
+```{r}
+ggplot(chicago_sf) + 
+  geom_point(aes(Per_cap_income, grocery_100k))
+
+ggplot(chicago_sf) + 
+  geom_point(aes(Pct_white, grocery_100k))  
+
+ggplot(chicago_sf) + 
+  geom_point(aes(Per_cap_income, log(grocery_100k)))
+
+
+ggplot(chicago_sf) + 
+  geom_sf(aes(fill = Pct_white), color = "white") + 
+  scale_fill_fermenter() + 
+  geom_sf(data = grocery_store) + 
+  theme_bw()
+```
+
+Start by fitting a linear regression model: 
+```{r}
+lm1 <- lm(grocery_100k ~ Pct_white, data= chicago_sf)
+plot(lm1, 1)
+summary(lm1)
+```
+
+Join residuals to sf and Plot Residuals:
+```{r}
+chicago_sf$resid1 <- residuals(lm1)
+```
+
+
+7. Using ggplot, make a chloropleth map of the residuals. 
+
+```{r}
+# looking at the colors of graph, the assumption of independent is violated, so ordinary linear regression method cannot be performed in here
+ggplot(chicago_sf) +
+  geom_sf(aes(fill = resid1), color = "white") + 
+  scale_fill_gradient2()
+```
+
+
+
+8. Check moran's I:
+```{r}
+moran(chicago_sf$resid1, 
+                       chicago_nbw, 
+                       n = length(chicago_nb), 
+                       S0 = Szero(chicago_nbw))
+```
+
+Fit spatial regression:
+```{r}
+sarlm1 <- lagsarlm(grocery_100k ~ Pct_white, data = chicago_sf, listw = chicago_nbw)
+
+summary(sarlm1)
+```
+
+- $\rho=$ 0.06; spatial autocorrelation in the number of grocery stores in neighboring communities is pretty low 
+- if $\rho$ is small, OLS is a good model. if $\rho$ is big, OLS is not to be trusted. 
+
+9. Compare the SAR (lagsarlm) and OLS (lm) models. Look at estimates of slope and intercept, the standard error, and p-value.
+
+
+10. Write 2-3 concluding sentences about what you learned of the distribution of grocery stores throughout Chicago. Consider including ideas from your background readings.
+
+- we caanot conclude satistical significance that regions with white people are correlated with more grocery store. Yet, aggregation and confounding variables exists in our analysis. It is also important to note that the graphs paint a different story than our original statistical analysis.
+
+_ **Interpretation**: For every \% point increase in white residents, number of groceries per 100,000 residents is predicted to increase 1.002 times (or by .2\%).
+
+
+
+Tries
+
+```{r}
+# Percent no vehicle
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Pct_no_vehicle, y = grocery_100k))
+
+lm_vehicle <- lm(grocery_100k ~ Pct_no_vehicle, data = chicago_sf)
+plot(lm_vehicle, 1)
+summary(lm_vehicle)
+
+# Median Income
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Med_income, y = grocery_100k))
+
+lm_income <- lm(grocery_100k ~ Med_income, data = chicago_sf)
+plot(lm_income, 1)
+summary(lm_income)
+
+# Percent African Americans
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Pct_black, y = grocery_100k))
+
+lm_black <- lm(grocery_100k ~ Pct_black, data = chicago_sf)
+plot(lm_black, 1)
+summary(lm_black)
+
+# Percent Hispanics
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Pct_hispanic, y = grocery_100k))
+
+lm_hisp <- lm(grocery_100k ~ Pct_hispanic, data = chicago_sf)
+plot(lm_hisp, 1)
+summary(lm_hisp)
+
+ggplot(data = chicago_sf) +
+  geom_point(aes(x = Pct_bad_transit, y = grocery_100k))
+
+lm_transit <- lm(grocery_100k ~ Pct_bad_transit, data = chicago_sf)
+plot(lm_transit, 1)
+summary(lm_transit)
+```
+
+Variable Selection
+```{r}
+library(MASS)
+model0 <- lm(grocery_100k ~ 1, data = chicago_sf)
+step.for <- stepAIC(model0, direction = "forward", trace = FALSE)
+summary(step.for)
+
+
+model1 <- lm(grocery_100k ~ Pop_2020 + Med_income + Per_cap_income + Pct_bad_transit + Pct_not_walkable + Pct_white + Pct_asian + Pct_black + Pct_hispanic + Pct_other + Pct_unemployed + Pct_poverty + Pct_no_vehicle, data = chicago_sf)
+summary(model1)
+step.both <- stepAIC(model0, direction = "both", trace = FALSE)
+summary(step.both)
+step(model1, direction = "both")
+```
+
