@@ -13,15 +13,18 @@ editor_options:
 # **Introduction** 
 
 ### Food Appartheid in Chicago
-Food Apartheid, first coined by food justice activist Karen Washington, refers to a system of segregation that divides those with access to an abundance of nutritious food and those who have been denied that access due to systemic injustice. While conveying similar meanings as food deserts, the term food apartheid is replacing food deserts in recent days because food apartheid better reflects the structural injustices and disparities in food access by low-income communities and communities of color than food deserts, which only explain the geographical area that experiences low access to healthy food without accounting for deeply rooted history of racial discrimination and injustice. 
+
+Food Apartheid, a term initially coined by food justice activist Karen Washington, refers to a systemic segregation that perpetuates disparities in access to nutritious food, rooted in systemic injustices. While sharing similarities with the concept of food deserts, the term food apartheid is gaining prominence as it better encapsulates the structural injustices and inequities in food access faced by low-income communities and communities of color. Unlike food deserts, which merely describe geographical areas with limited access to healthy food, food apartheid acknowledges the deep-seated history of racial discrimination and injustice.
 
 \
 
-Chicago, despite being the third largest city in the United States, is one of the cities that experiences severe food apartheid problems, where one in five households in the Chicago area is facing food insecurity, according to the Greater Chicago Food Depository. Food insecurity issues are especially more prevalent in the community areas of the south-side of Chicago where the majority of residents are African-Americans. One reason these areas are suffering from food accessibility is that there are not enough grocery stores and even existing ones are disappearing one by one. The presence of the grocery store in a community area is a very important measure of food accessibility because it provides diverse line of nutritious groceries including fresh produce, fresh meat, deli, and other packaged goods, all of which are crucial factors of healthy diets.
+Chicago, despite being the third largest city in the United States, grapples with severe food apartheid issues, with one in five households in the Chicago area experiencing food insecurity, as reported by the Greater Chicago Food Depository. This problem is particularly acute in the community areas of the south side of Chicago, where a majority of residents are African American. Insufficient access to grocery stores exacerbates food insecurity in these areas, with existing stores dwindling in number. The presence of a grocery store in a community area plays a pivotal role in food accessibility, offering a diverse array of nutritious groceries, including fresh produce, meat, deli items, and packaged goods, all essential components of a healthy diet.
 
 \
 
-In this analysis, I am focusing on the grocery store locations in the city of Chicago and their potential relationship with the demographic factors including race and socioeconomic status. In order to answer the main question of which areas of Chicago are affected by food apartheid and the special characteristics of those areas, I computed Moran's I to measure the spatial autocorrelation of grocery store locations, and then performed a spatial regression using spatial autoregressive (SAR) models to look into the relationship between the grocery store locations and several independent factors, while accounting for spatial impact.
+In this analysis, I focus on the distribution of grocery store locations in Chicago and their potential relationship with demographic factors such as race and socioeconomic status. To address the main question of which areas of Chicago are affected by food apartheid and the unique characteristics of these areas, I computed Moran's I to assess the spatial autocorrelation of grocery store locations. Additionally, I conducted spatial regression using spatial autoregressive (SAR) models to examine the relationship between grocery store locations and various independent factors while accounting for spatial effects.
+
+\
 
 ```{r, out.width = "50%", echo = FALSE, message = FALSE, warning = FALSE, results = FALSE}
 library(dplyr)
@@ -239,13 +242,13 @@ table2
 
 \
 
-Once the map of Chicago was created, I then plotted the locations of grocery stores all over the Chicago in Figure 2. Each dot represents the grocery store location. From Figure 2, it is already quite intuitive that there are more grocery stores in the north side of Chicago than south side. Table 2 below lists the community areas and the number of grocery stores in each area. While a few of the areas have more than 10 grocery stores, there even exists community areas with **zero** grocery stores. In figure 3, I filtered the community areas so that only those areas with either more than 10 (in green) or zero (in red) grocery stores. This figure highlights the discrepency in the number of grocery stores between community areas and the fact that those areas filled in red tend to be located at the south side of the city. However, it is not the most appropriate to make any conclusions based solely on this map because this is simply counting the number of grocery stores in each area and there are many other factors that have not been accounted for. For example, although both the areas 18 and 54 have zero grocery stores, the degree of accessibility to grocery stores might be much lower for residents in area 18 than those living in area 54 because there are several grocery stores located right at the border of areas between 18 and 19. Therefore, it is not possible to assume that all of the nine red community areas have the same degree of accessibility to grocery stores. 
+After creating the map of Chicago, I proceeded to plot the locations of grocery stores across the city in Figure 2, with each dot representing a grocery store location. A visual inspection of Figure 2 already suggests a higher concentration of grocery stores in the north side of Chicago compared to the south side. Table 2 below provides a breakdown of community areas alongside the corresponding number of grocery stores in each area. While several areas boast more than 10 grocery stores, there are also community areas devoid of any such establishments. In Figure 3, I filtered the community areas to highlight those with either more than 10 (depicted in green) or zero (depicted in red) grocery stores. This visualization underscores the disparities in grocery store distribution across community areas, particularly noting that those areas shaded in red predominantly lie in the south side of the city. However, it's crucial to refrain from drawing definitive conclusions based solely on this map, as it merely represents a count of grocery stores in each area without accounting for various other factors. For instance, although both areas 18 and 54 register zero grocery stores, the accessibility to grocery stores may vary significantly between them. This discrepancy could be attributed to several grocery stores situated near the border of areas 18 and 19, potentially offering better accessibility to residents in area 54 compared to those in area 18. Hence, it's imprudent to assume the same level of accessibility to grocery stores across all nine red community areas. 
 
 \
 
 ### Moran's I
 
-From the initial visualizations, it seems to be that the values close to one another tend to be similar, just like the number of grocery stores in each community area. Knowing the locations of grocery stores do not exhibit a completely random spatial pattern, I decided to measure a spatial pattern or clustering by computing Moran's I statistic.
+Based on the preliminary visualizations, there appears to be a tendency for values in close proximity to one another to exhibit similarity, as observed with the number of grocery stores in each community area. Recognizing that the spatial distribution of grocery stores does not display a completely random pattern, I opted to quantify this spatial pattern or clustering by computing Moran's I statistic.
 
 \
 
@@ -278,7 +281,7 @@ ggplot(chicago_sf) +
 
 \
 
-The Moran’s I statistic is the correlation coefficient for the relationship between a variable (like the number of grocery stores) and its neighboring values. But before computing the correlation, the neighbors have to be defined. While there are many different approaches for creating a list of neighbors, I used `poly2nb` function where it builds a neighbors list based on regions with contiguous boundaries, that is sharing one or more boundary point. The next step is to add spatial weights to a neighbors list, which is an important step to normalize the Moran's I statistic so that the range of possible Moran's I values are between -1 and 1. 
+The Moran’s I statistic serves as the correlation coefficient measuring the relationship between a variable, such as the number of grocery stores, and its neighboring values. However, before computing this correlation, it's essential to define the neighbors. While various methods exist for constructing a list of neighbors, I employed the `poly2nb` function, which generates a neighbors list based on regions with contiguous boundaries, indicating the sharing of one or more boundary points. Subsequently, spatial weights are added to this neighbors list, a crucial step aimed at normalizing the Moran's I statistic. This normalization ensures that the range of possible Moran's I values falls within -1 and 1, facilitating meaningful interpretation.
 
 \
 
@@ -300,11 +303,11 @@ lm(num_grocery_lag ~ num_grocery, data = chicago_sf) %>%
 
 \
 
-Once the neighbors list is created and the weights are calculated, we can compute the aggregated values for each neighborhoods (i.e. a total number of grocery stores in the community area), which is referred to as a spatially lagged value ($x_{lag}$). Using the number of grocery stores in each community area of Chicago computed in the setup code chunk above, I plotted the summarized neighborhood value of the number of grocery store ($X_{lag}$) against the number of grocery store for each county ($X$) for each county. The Moran’s I coefficient between $X_{lag}$ and $X$ is the slope of the least squares regression line that best fits the points after having equalized the spread between both sets of data, which can be computed by the linear regression.
+Once the neighbors list is established and the weights are determined, we can calculate the aggregated values for each neighborhood, representing the total number of grocery stores in the community area. This aggregated value is known as a spatially lagged value ($x_{lag}$). Utilizing the number of grocery stores in each community area of Chicago, as computed in the setup code chunk above, I generated a plot illustrating the summarized neighborhood value of the number of grocery stores ($X_{lag}$) against the number of grocery stores for each county ($X$). The Moran’s I coefficient between $X_{lag}$ and $X$ represents the slope of the least squares regression line that best fits the points after normalizing the spread between both sets of data, a computation performed via linear regression.
 
 \
 
-There is a slightly easier way to compute the Moran's I statistic, which is to use a built-in `moran.test` function that would conveniently return the statistic. Steps are as follows:
+There is a slightly more convenient way to compute the Moran's I statistic, which is to use a built-in `moran.test` function that would conveniently return the statistic. Steps are as follows:
 
 \
 
@@ -320,13 +323,13 @@ moran.test(chicago_sf$num_grocery, chicago_nbw, zero.policy = TRUE)
 
 \
 
-The result of both linear regression and `moran.test` is the same at $I = 0.287$. Although the strength of the relationship is quite weak, this suggests that there exists a positive spatial autocorrelation. If there is no degree of association between $X_{lag}$ and $X$, the slope will be close to flat, resulting in a Moran’s I value near 0.
+The findings from both the linear regression and `moran.test` indicate a consistent Moran's I value of 0.287. Despite the relatively weak strength of this relationship, it suggests the presence of positive spatial autocorrelation. When there is minimal association between $X_{lag}$ and $X$, the slope tends to approach flat, consequently yielding a Moran's I value close to 0.
 
 \
 
 ### Significance Test
 
-With Moran's I value of 0.287, what is left is to test the significance of this value. Here I used Monte-Carlo test to prove the significance of Moran's I value I found above. In a Monte-Carlo test, the attribute values (the number of grocery stores in this case) are randomly assigned to community areas in the data set and, for each permutation of the attribute values, a Moran’s I value is computed. The output is a sampling distribution of Moran’s I values under the Null Hypothesis that attribute values are randomly distributed across the city of Chicago. I then compared the observed Moran’s I value to this sampling distribution. Below is the null and alternative hypothesis for this significance testing.
+With a Moran's I value of 0.287 calculated, the next step is to assess its significance. To achieve this, I conducted a Monte Carlo test, wherein attribute values (in this case, the number of grocery stores) are randomly assigned to community areas within the dataset. For each permutation of attribute values, a Moran's I value is computed, resulting in a sampling distribution of Moran's I values under the Null Hypothesis, which assumes that attribute values are randomly distributed across Chicago. The observed Moran's I value is then compared to this sampling distribution. Below are the null and alternative hypotheses for this significance testing.
 
 \
 
@@ -387,20 +390,20 @@ ggplot() +
 
 \
 
-The histogram indicates that the observed value of 0.287 is not a value one would expect to compute if the number of grocery stores values were randomly distributed across each community area of Chicago. Additionally, with a p-value of 0.002, we can reject the null hypothesis and make a conclusion that there is a spatial autocorrelaiton of the number of grocery stores between community areas of Chicago.
+The histogram illustrates that the observed value of 0.287 deviates significantly from what one would anticipate if the distribution of the number of grocery stores across each community area of Chicago were random. Furthermore, with a p-value of 0.002, we can confidently reject the null hypothesis, leading us to conclude that there exists spatial autocorrelation in the number of grocery stores among the community areas of Chicago.
 
 \
 
 
 # **Spatial Regression**
 
-To take a step further and investigate the grocery store location's potential association with other features, I included the spatial regression part that briefly touches on the use of SAR (Simultaneous Autoregressive Model). In order to perform this type of regression, I used the `lagsarlm` function that takes the following form:
+To delve deeper into the potential associations between grocery store locations and other features, I incorporated a spatial regression component, which briefly introduces the utilization of the SAR (Simultaneous Autoregressive Model). To execute this regression, I employed the `lagsarlm` function, structured as follows:
 
 $$Y = \beta_0 + \beta_1X + \rho\sum w_iY_i$$
 
 \
 
-where $\rho$ describes the degree of correlation with neighbors, $w_i$ is the weight on neighbor $i$, and $\beta_i$ is the regression coefficients for the variables of interests just like the linear regression. If $\rho$ value is close to 1, it indicates a high spatial autocorrelation between the variables of interests and it should be accounted for in the analysis. However, on the other hand, if $\rho$ value is close to 0, it indicates that there is little to no spatial autocorrelation between the variables of interests, in which case the results of the ordinary least square (linear) regression can be trusted and used for the analysis.
+Here, $\rho$ characterizes the level of correlation with neighboring data points, $w_i$ represents the weight assigned to neighbor $i$, and $\beta_i$ denotes the regression coefficients for the variables of interest, akin to those in linear regression. If the $\rho$ value approaches 1, it signifies a pronounced spatial autocorrelation among the variables of interest, necessitating its consideration in the analysis. Conversely, if the $\rho$ value nears 0, it indicates minimal spatial autocorrelation among the variables, enabling reliance on the results of ordinary least squares (linear) regression for analysis purposes.
 
 ### Exploratory Spatial Data Analysis
 
@@ -472,8 +475,7 @@ ggplot(chicago_sf) +
 
 \
 
-I only picked **White** and **African American** to be included in this analysis to prevent this analysis to be exceedingly long and primarily due to the fact that these two races show very clear contrasts in terms of community areas in which each group lives in. One of the observations that is very evident from Figure 8 and Figure 10 is that white people tend to live in the north side of Chicago, consisting of more than 40% of the total population of those community areas in north. On the other hand, African American people tend to be clustered in the south side of the city, consisting of more than 60% to 80% of the entire population of those community areas in south. This might suggests a moderate to strong spatial correlation in the race of residents in each community area, where the residents of the same race tend to live closer to each other just like the figures describe above. Looking at the scatter plot in Figure 9 and 11, it is possible to observe slightly positive linear association between the number of grocery stores and the percentage of white residents and slightly negative linear association between the number of grocery stores and the percentage of African-american residents in each community area. However, no conclusions can be made before the significance testing. 
-
+I specifically chose to analyze data regarding White and African American populations to maintain conciseness in this analysis, considering their starkly contrasting distribution across community areas. Notably, Figure 8 and Figure 10 highlight distinct spatial patterns: White residents predominantly inhabit the northern Chicago regions, constituting over 40% of the total population in these areas, while African American residents cluster predominantly in the southern parts, accounting for 60% to 80% of the population in those regions. This observation suggests a notable spatial correlation in residents' racial composition, wherein individuals of the same race tend to reside in closer proximity, as illustrated in the aforementioned figures. Upon examining the scatter plots in Figure 9 and 11, a subtle positive linear relationship between the number of grocery stores and the percentage of White residents, and a slight negative linear association with the percentage of African American residents in each community area, become apparent. Nonetheless, it's imperative to conduct significance testing before drawing any definitive conclusions.
 \
 
 ##### Socioeconomic Factors
@@ -547,7 +549,7 @@ ggplot(chicago_sf) +
 
 \
 
-Figure 14 displays the average per capita income for each community area. It seems as though the average per capita income is slightly higher, in general, in the community areas in the north side of Chicago than those in the south side of Chicago. But there are a few areas in the northeast side of the city where the average per capita income is much higher than the rest of the city, and those neighborhoods are clusterd together. Figure 15 describes the poverty rate (people who earn less than $25,000 annually) of each community area. It is quite evident that there are significantly less grocery stores in the same areas that show high rates of poverty, and the majority of residents in these community areas are African Americans. Looking at the scatter plot in Figure 13 and 15, it is possible to observe the positive linear association between the number of grocery stores and the Per Capita Income and the negative linear association between the number of grocery stores and the poverty rate of each community area. However, again, no conclusions can be made before the significance testing.
+Figure 14 depicts the average per capita income for each community area, revealing a general trend of slightly higher incomes in the northern regions compared to the southern areas of Chicago. Notably, specific neighborhoods in the northeast exhibit considerably higher average per capita incomes, forming distinct clusters within the city. Meanwhile, Figure 15 outlines the poverty rate (individuals earning less than $25,000 annually) across community areas. It's evident that areas with high poverty rates correspond to fewer grocery stores, with a predominant African American population in these regions. Examining the scatter plots in Figures 13 and 15, a positive linear relationship emerges between the number of grocery stores and per capita income, while a negative association is observed between the number of grocery stores and the poverty rate in each community area. However, it's crucial to refrain from drawing conclusions until significance testing is conducted.
 
 \
 
@@ -720,7 +722,7 @@ summary(pct_poverty_lm)
 
 \
 
-To briefly touch on the results of a series of linear regressions, all four independent variables of my interests (% white, % African-american, Per capita income, and Poverty rate) are significant predictors of the number of grocery stores in each community area. Interpretations of linear regression specific to each independent variable are as follows:
+In summarizing the outcomes of a sequence of linear regressions, it's notable that all four independent variables of interests (% white, % African-American, per capita income, and poverty rate) emerge as significant predictors of the number of grocery stores within each community area. Below, I offer interpretations of the linear regression findings pertaining to each independent variable:
 
 \
 
@@ -732,7 +734,7 @@ To briefly touch on the results of a series of linear regressions, all four inde
 \
 
 ### Simultaneous Autoregressive Model
-While the job seems to be done with the significant results above, we should not forget that we are dealing with spatial data. Therefore, it is necessary to test the existence of spatial autocorrelation. As mentioned before, if the spatial autocorrelation exists and is high, it needs to be accounted by using simultaneous autoregressive model. Otherwise, the assumption of independence, one of the conditions that have to be met to trust the results of linear regression, is violated. Below are the results from the simultaneous autoregressive models.
+Although the significant results above may suggest that the job is complete, it's imperative to remember that we are working with spatial data. Hence, testing for the presence of spatial autocorrelation is essential. As previously noted, if spatial autocorrelation exists and is substantial, it must be addressed by employing a simultaneous autoregressive model. Failure to do so would violate the assumption of independence, a prerequisite for trusting the results of linear regression. Below, I present the findings from the simultaneous autoregressive models.
 
 \
 
@@ -762,7 +764,7 @@ summary(sarlm_poverty)
 
 \
 
-All four of models return $\rho$ values between 0.33 and 0.42 with their respective p-values less than 0.05. Such moderately positive $\rho$ values tell us that there does exists the difference, though not by much, in the results between SAR model and linear regression model. Therefore, it might be a good idea that we take into account of spatial autocorrelation when interpreting the regression results and making conclusions. 
+Each of the four models yields $\rho$ values ranging from 0.33 to 0.42, all with p-values less than 0.05. These moderately positive $\rho$ values indicate that there is a discernible difference, albeit slight, in the outcomes between the SAR model and the linear regression model. Thus, it is advisable to consider spatial autocorrelation when interpreting the regression results and drawing conclusions.
 
 Interpretations of SAR models specific to each independent variable are as follows:
 
@@ -778,14 +780,14 @@ Interpretations of SAR models specific to each independent variable are as follo
 
 \
 
-To sum up, the results have changed after the use of SAR model, which accounted for the spatial correlations. Two of the variables (percentage of white residents and percentage of residents earning less than $25,000) that were significant in the linear regression are no longer significant under SAR model. However, the other two variables (percentage of African-american residents and Per capita income) remain significant even after considering the spatial autocorrelation. Therefore, percentage of African-american residents and the per capita income of each of the community area of Chicago can be statistically significant predictors of the number of grocery stores in the area.
+In summary, the introduction of the SAR model, which addresses spatial correlations, has resulted in changes to the analysis outcomes. Notably, two variables, namely the percentage of white residents and the percentage of residents earning less than $25,000, which previously showed significance in the linear regression, are now rendered non-significant in the SAR model. Conversely, the percentage of African-American residents and per capita income remain statistically significant even after accounting for spatial autocorrelation. This suggests that these two variables can serve as robust predictors of the number of grocery stores in each community area of Chicago, underscoring their importance in the analysis.
 
 \
 
 ### About Ecological Fallacy
 
-An Ecological Fallacy is a formal fallacy in the interpretation of statistical data that occurs when if the observed relationships at aggregate (group) levels are falsely attributed to individual levels. This should be avoided because it can lead to erroneous conclusions and false assumptions about relationships especially in social phenomena. An Ecological Fallacy can also be used to justify the false belief or assumption. 
+The Ecological Fallacy is a formal error in statistical interpretation wherein relationships observed at aggregate (group) levels are erroneously attributed to individual levels. This fallacy can lead to inaccurate conclusions and misguided assumptions, particularly in understanding social phenomena. Furthermore, it can perpetuate false beliefs or assumptions if not addressed.
 
 \
 
-In the case of this analysis, all of the demographic data and the number of grocery stores are aggregated at the community area level. Therefore, all conclusions regarding spatial autocorrelation and the significance of demographic factors in relation to the number of grocery stores should not be applied to smaller neighborhoods, household, or individual levels. It is likely that the results could change (possibly drastically) if the same analysis would be done with data gathered at different aggregate levels. 
+In the context of this analysis, demographic data and the number of grocery stores are aggregated at the community area level. Consequently, any conclusions drawn regarding spatial autocorrelation and the significance of demographic factors concerning the number of grocery stores should not be extrapolated to smaller neighborhoods, households, or individual levels. It's important to recognize that the results may vary significantly if the same analysis were conducted with data collected at different aggregate levels.
